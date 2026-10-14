@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Type the words to shoot down incoming enemies before they reach your base.">
+  <title>Typing Defence</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hud" aria-label="Game status">
+    <div class="hud-group">
+      <div class="stat"><span class="label">Score</span><span class="value" id="hud-score">0</span></div>
+      <div class="stat"><span class="label">Best</span><span class="value" id="hud-best">0</span></div>
+      <div class="stat"><span class="label">Wave</span><span class="value" id="hud-wave">1</span></div>
+    </div>
+
+    <div class="hud-health" aria-label="Base health">
+      <span class="label">Base</span>
+      <div class="health-bar"><div class="health-fill" id="hud-health"></div></div>
+    </div>
+
+    <div class="hud-group">
+      <div class="stat"><span class="label">Combo</span><span class="value" id="hud-combo">x0</span></div>
+      <div class="stat"><span class="label">WPM</span><span class="value" id="hud-wpm">0</span></div>
+      <div class="stat"><span class="label">Acc</span><span class="value" id="hud-acc">100%</span></div>
+      <button class="icon-btn" id="btn-mute" type="button" aria-label="Toggle sound" title="Toggle sound">🔊</button>
+      <button class="icon-btn" id="btn-pause" type="button" aria-label="Pause" title="Pause (Esc)">⏸</button>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <canvas id="game" aria-label="Typing Defence game field"></canvas>
+
+    <!-- Hidden input so mobile devices open their keyboard -->
+    <input id="mobile-input" class="mobile-input" type="text" autocomplete="off" autocorrect="off"
+           autocapitalize="off" spellcheck="false" aria-label="Type here">
+
+    <div class="overlay" id="overlay">
+      <section class="panel" id="panel-start">
+        <h1>Typing <span class="accent">Defence</span></h1>
+        <p class="lead">Enemies are coming for your base. Type the word on an enemy to shoot it down.</p>
+        <ul class="howto">
+          <li>Type the <strong>first letter</strong> of a word to lock on.</li>
+          <li>Finish the word to destroy the enemy.</li>
+          <li>Typos break your <strong>combo</strong>. Clean waves repair the base.</li>
+          <li>Every 5th wave brings a <strong>boss</strong>.</li>
+        </ul>
+        <div class="difficulty" role="radiogroup" aria-label="Difficulty">
+          <button type="button" class="diff" data-diff="easy" role="radio" aria-checked="false">Easy</button>
+          <button type="button" class="diff active" data-diff="normal" role="radio" aria-checked="true">Normal</button>
+          <button type="button" class="diff" data-diff="hard" role="radio" aria-checked="false">Hard</button>
+        </div>
+        <button class="primary" id="btn-start" type="button">Start game</button>
+        <p class="hint">Press <kbd>Enter</kbd> to start · <kbd>Esc</kbd> to pause</p>
+      </section>
+
+      <section class="panel hidden" id="panel-pause">
+        <h2>Paused</h2>
+        <p class="lead">Take a breath.</p>
+        <button class="primary" id="btn-resume" type="button">Resume</button>
+        <button class="secondary" id="btn-quit" type="button">Quit to menu</button>
+        <p class="hint">Press <kbd>Esc</kbd> to resume</p>
+      </section>
+
+      <section class="panel hidden" id="panel-over">
+        <h2>Base destroyed</h2>
+        <p class="lead" id="over-msg"></p>
+        <dl class="results">
+          <div><dt>Score</dt><dd id="res-score">0</dd></div>
+          <div><dt>Wave</dt><dd id="res-wave">1</dd></div>
+          <div><dt>Kills</dt><dd id="res-kills">0</dd></div>
+          <div><dt>WPM</dt><dd id="res-wpm">0</dd></div>
+          <div><dt>Accuracy</dt><dd id="res-acc">100%</dd></div>
+          <div><dt>Best combo</dt><dd id="res-combo">0</dd></div>
+        </dl>
+        <button class="primary" id="btn-restart" type="button">Play again</button>
+        <button class="secondary" id="btn-menu" type="button">Main menu</button>
+        <p class="hint">Press <kbd>Enter</kbd> to play again</p>
+      </section>
+    </div>
+  </main>
+
+  <script src="words.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
