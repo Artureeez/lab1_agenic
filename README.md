@@ -13,7 +13,13 @@ Built with plain **HTML, CSS and JavaScript**: no build step and no dependencies
 - Every 5th wave has a **boss** with a long word. It does 3 damage if it reaches you.
 - `Enter` starts the game, and `Esc` pauses it.
 
-Best scores are saved in your browser for each difficulty (Easy / Normal / Hard).
+Best scores are saved in your browser for each language and difficulty (Easy / Normal / Hard).
+
+## Languages
+
+Pick **English** or **עברית (Hebrew)** on the start screen. In Hebrew mode the enemies carry Hebrew words and the menus switch to right-to-left.
+
+You don't need to change your computer's keyboard language. The game reads which physical key you pressed and uses the standard Israeli layout (for example, the `A` key types `ש` in Hebrew mode). Final letters (ך ם ן ף ץ) are separate keys, as on a real Hebrew keyboard.
 
 ## Files
 
@@ -21,7 +27,8 @@ Best scores are saved in your browser for each difficulty (Easy / Normal / Hard)
 | ------------ | ------------------------------------------ |
 | `index.html` | Page layout, HUD and menus                 |
 | `style.css`  | Styling                                    |
-| `words.js`   | Word lists (easy, medium, hard, boss)      |
+| `words.js`   | Word lists per language (easy, medium, hard, boss) |
+| `i18n.js`    | Menu text and keyboard layouts per language |
 | `script.js`  | Game loop, typing logic, rendering, sound  |
 
 ## Run locally

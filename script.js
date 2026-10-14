@@ -132,13 +132,30 @@ function makeStars() {
 let difficulty = storage.get("td.difficulty", "normal");
 if (!DIFFICULTY[difficulty]) difficulty = "normal";
 
+let language = storage.get("td.language", "en");
+if (!LANGS[language]) language = "en";
+
+function lang() {
+  return LANGS[language];
+}
+
+function bestKey() {
+  return `td.best.${language}.${difficulty}`;
+}
+
+function loadBest() {
+  // English scores used to be stored without a language in the key.
+  const legacy = language === "en" ? storage.get(`td.best.${difficulty}`, 0) : 0;
+  return storage.get(bestKey(), legacy);
+}
+
 let game = null;
 let phase = "menu"; // menu | playing | paused | over
 
 function newGame() {
   return {
     score: 0,
-    best: storage.get(`td.best.${difficulty}`, 0),
+    best: loadBest(),
     hp: MAX_HP,
     wave: 0,
     enemies: [],
@@ -171,7 +188,7 @@ function startWave(n) {
   g.waveDamaged = false;
   g.waveDelay = 2.2;
   g.spawnTimer = 0;
-  g.banner = { text: n % 5 === 0 ? `Wave ${n} · Boss` : `Wave ${n}`, t: 2.2 };
+  g.banner = { text: lang().waveBanner(n, n % 5 === 0), t: 2.2 };
 
   const count = 5 + n * 2;
   g.spawnInterval = Math.max(0.45, 2.1 - n * 0.12) * diff.spawn;
@@ -192,7 +209,7 @@ function pickTier(wave) {
 }
 
 function pickWord(tier) {
-  const pool = WORDS[tier];
+  const pool = WORDS[language][tier];
   const active = game.enemies.filter((e) => !e.doomed);
   const usedLetters = new Set(active.map((e) => e.word[0]));
   const usedWords = new Set(active.map((e) => e.word));
@@ -240,7 +257,7 @@ function spawnEnemy({ boss }) {
 function handleChar(raw) {
   if (phase !== "playing") return;
   const ch = raw.toLowerCase();
-  if (!/^[a-z]$/.test(ch)) return;
+  if (!lang().alphabet.test(ch)) return;
 
   const g = game;
   g.keystrokes++;
@@ -436,7 +453,7 @@ function update(dt) {
     }
     const bonus = g.wave * 50;
     g.score += bonus;
-    floatText(W / 2, H / 2 + 40, `Wave clear +${bonus}`, "#4cc9f0");
+    floatText(W / 2, H / 2 + 40, lang().waveClear(bonus), "#4cc9f0");
     startWave(g.wave + 1);
   }
 
@@ -503,8 +520,9 @@ function draw(dt) {
   ctx.globalAlpha = 1;
 
   // Floating text
+  ctx.direction = lang().dir;
   ctx.textAlign = "center";
-  ctx.font = "700 16px ui-monospace, Menlo, Consolas, monospace";
+  ctx.font = "700 16px ui-monospace, Menlo, Consolas, 'Courier New', monospace";
   for (const t of g.texts) {
     ctx.globalAlpha = Math.max(0, t.t);
     ctx.fillStyle = t.color;
@@ -592,7 +610,7 @@ function drawEnemy(e, isTarget) {
 
   // Word label
   const fontSize = e.boss ? 18 : 15;
-  ctx.font = `700 ${fontSize}px ui-monospace, Menlo, Consolas, monospace`;
+  ctx.font = `700 ${fontSize}px ui-monospace, Menlo, Consolas, "Courier New", monospace`;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   const typed = e.word.slice(0, e.typed);
@@ -614,10 +632,22 @@ function drawEnemy(e, isTarget) {
   ctx.stroke();
 
   const ty = ly + labelH / 2 + 1;
-  ctx.fillStyle = "#ffd166";
-  ctx.fillText(typed, lx + padX, ty);
-  ctx.fillStyle = e.doomed ? "rgba(255,255,255,0.3)" : "#ffffff";
-  ctx.fillText(rest, lx + padX + typedW, ty);
+  const restColor = e.doomed ? "rgba(255,255,255,0.3)" : "#ffffff";
+  if (lang().dir === "rtl") {
+    // Right-to-left: the typed part sits on the right edge.
+    const right = lx + labelW - padX;
+    ctx.direction = "rtl";
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#ffd166";
+    ctx.fillText(typed, right, ty);
+    ctx.fillStyle = restColor;
+    ctx.fillText(rest, right - typedW, ty);
+  } else {
+    ctx.fillStyle = "#ffd166";
+    ctx.fillText(typed, lx + padX, ty);
+    ctx.fillStyle = restColor;
+    ctx.fillText(rest, lx + padX + typedW, ty);
+  }
   ctx.textBaseline = "alphabetic";
 }
 
@@ -693,12 +723,12 @@ function endGame() {
   phase = "over";
   const { wpm, acc } = stats();
   const isRecord = g.score > g.best;
-  if (isRecord) storage.set(`td.best.${difficulty}`, g.score);
+  if (isRecord) storage.set(bestKey(), g.score);
   updateHud();
 
   document.getElementById("over-msg").textContent = isRecord
-    ? `New best score on ${difficulty}!`
-    : `You held out until wave ${g.wave}.`;
+    ? lang().newBest(lang().text[difficulty])
+    : lang().heldOut(g.wave);
   document.getElementById("res-score").textContent = g.score;
   document.getElementById("res-wave").textContent = g.wave;
   document.getElementById("res-kills").textContent = g.kills;
@@ -738,7 +768,12 @@ document.addEventListener("keydown", (ev) => {
 
   if (phase === "playing" && ev.key.length === 1) {
     ev.preventDefault(); // stops the hidden input from also receiving it
-    if (!ev.repeat) handleChar(ev.key);
+    if (ev.repeat) return;
+    // If the OS keyboard is set to another language, fall back to the
+    // physical key position (e.g. the "A" key types "ש" in Hebrew mode).
+    let ch = ev.key.toLowerCase();
+    if (!lang().alphabet.test(ch) && lang().keys[ev.code]) ch = lang().keys[ev.code];
+    handleChar(ch);
   }
 });
 
@@ -780,17 +815,41 @@ for (const btn of document.querySelectorAll(".diff")) {
   btn.addEventListener("click", () => {
     difficulty = btn.dataset.diff;
     storage.set("td.difficulty", difficulty);
-    syncDifficultyButtons();
+    syncMenuButtons();
   });
 }
 
-function syncDifficultyButtons() {
-  for (const b of document.querySelectorAll(".diff")) {
-    const on = b.dataset.diff === difficulty;
+for (const btn of document.querySelectorAll(".lang")) {
+  btn.addEventListener("click", () => {
+    language = btn.dataset.lang;
+    storage.set("td.language", language);
+    applyLanguage();
+  });
+}
+
+function setActive(selector, attr, value) {
+  for (const b of document.querySelectorAll(selector)) {
+    const on = b.dataset[attr] === value;
     b.classList.toggle("active", on);
     b.setAttribute("aria-checked", String(on));
   }
-  hud.best.textContent = storage.get(`td.best.${difficulty}`, 0);
+}
+
+function syncMenuButtons() {
+  setActive(".diff", "diff", difficulty);
+  setActive(".lang", "lang", language);
+  hud.best.textContent = loadBest();
+}
+
+function applyLanguage() {
+  const L = lang();
+  document.documentElement.lang = language;
+  document.documentElement.dir = L.dir;
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    el.innerHTML = L.text[el.dataset.i18n];
+  }
+  document.title = L.text.title.replace(/<[^>]+>/g, "");
+  syncMenuButtons();
 }
 
 // ---------- Main loop ----------
@@ -806,6 +865,6 @@ function frame(now) {
 window.addEventListener("resize", resize);
 resize();
 updateMuteButton();
-syncDifficultyButtons();
+applyLanguage();
 showPanel("start");
 requestAnimationFrame(frame);
