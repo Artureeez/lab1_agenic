@@ -38,6 +38,11 @@ const sound = {
   kill() { this.play(520, 0.18, "triangle", 0.08, -380); },
   hurt() { this.play(90, 0.35, "sawtooth", 0.09, -40); },
   wave() { this.play(440, 0.12, "triangle", 0.06, 220); },
+  alarm() {
+    this.play(880, 0.12, "square", 0.05, 0);
+    setTimeout(() => this.play(660, 0.14, "square", 0.05, 0), 140);
+  },
+  powerdown() { this.play(320, 0.6, "sawtooth", 0.08, -240); },
   powerup() {
     this.play(660, 0.1, "triangle", 0.07, 0);
     setTimeout(() => this.play(990, 0.18, "triangle", 0.07, 300), 90);
@@ -47,6 +52,8 @@ const sound = {
 // ---------- Background music ----------
 // A looping synth track: bass, arpeggio and hi-hat over Am - F - C - G.
 // Uses a look-ahead scheduler so timing stays tight.
+const MUSIC_VOLUME = 0.6;
+
 const music = {
   enabled: storage.get("td.music", true),
   playing: false,
@@ -71,7 +78,7 @@ const music = {
     this.playing = true;
     this.out = ac.createGain();
     this.out.gain.setValueAtTime(0.0001, ac.currentTime);
-    this.out.gain.exponentialRampToValueAtTime(0.6, ac.currentTime + 0.8);
+    this.out.gain.exponentialRampToValueAtTime(MUSIC_VOLUME, ac.currentTime + 0.8);
     this.out.connect(ac.destination);
     if (!this.noise) this.noise = makeNoise(ac);
     this.nextTime = ac.currentTime + 0.05;
@@ -88,6 +95,14 @@ const music = {
     out.gain.setValueAtTime(out.gain.value, ac.currentTime);
     out.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.3);
     setTimeout(() => out.disconnect(), 400);
+  },
+
+  // Turn the music down while the announcer speaks.
+  duck(on) {
+    if (!this.playing) return;
+    const ac = sound.ctx;
+    this.out.gain.cancelScheduledValues(ac.currentTime);
+    this.out.gain.setTargetAtTime(on ? MUSIC_VOLUME * 0.3 : MUSIC_VOLUME, ac.currentTime, 0.08);
   },
 
   schedule() {
@@ -142,3 +157,50 @@ function makeNoise(ac) {
   for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
   return buffer;
 }
+
+// ---------- Voice announcer ----------
+// Uses the browser's built-in speech synthesis. Shares the sound-effects
+// mute. Falls back to English if no voice exists for the game language.
+const voice = {
+  supported: "speechSynthesis" in window,
+  voices: [],
+
+  init() {
+    if (!this.supported) return;
+    const load = () => {
+      this.voices = speechSynthesis.getVoices();
+    };
+    load();
+    speechSynthesis.addEventListener("voiceschanged", load);
+  },
+
+  find(langCode) {
+    const prefix = langCode.slice(0, 2).toLowerCase();
+    const matches = this.voices.filter((v) => v.lang.toLowerCase().startsWith(prefix));
+    return matches.find((v) => v.lang === langCode) || matches[0] || null;
+  },
+
+  say(text, langCode, { pitch = 1, fallback = null } = {}) {
+    if (!this.supported || sound.muted) return;
+    let chosen = this.find(langCode);
+    // Voice list loaded but nothing for this language: speak the English line instead.
+    if (!chosen && this.voices.length && fallback) {
+      text = fallback;
+      langCode = "en-US";
+      chosen = this.find(langCode);
+    }
+    speechSynthesis.cancel(); // newest announcement wins
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = langCode;
+    if (chosen) u.voice = chosen;
+    u.rate = 1.05;
+    u.pitch = pitch;
+    u.onstart = () => music.duck(true);
+    u.onend = u.onerror = () => music.duck(false);
+    speechSynthesis.speak(u);
+  },
+
+  stop() {
+    if (this.supported) speechSynthesis.cancel();
+  },
+};

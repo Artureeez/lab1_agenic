@@ -1,10 +1,11 @@
 "use strict";
 
 /* =========================================================
-   Typing Defence
+   Typing Defense
    Type the word on an enemy to shoot it before it reaches
    your base. Plain JS + canvas, no build step needed.
-   Depends on: storage.js, words.js, i18n.js, audio.js, leaderboard.js
+   Depends on: storage.js, words.js, i18n.js, audio.js,
+               background.js, sprites.js, leaderboard.js
    ========================================================= */
 
 // ---------- DOM ----------
@@ -46,18 +47,44 @@ const DIFFICULTY = {
   hard: { speed: 1.3, spawn: 0.8 },
 };
 
+// Enemy look depends on how hard its word is.
+const LOOKS = {
+  easy: { look: "meteor", radius: 14, sway: 0 },
+  medium: { look: "fighter", radius: 15, sway: 45 },
+  hard: { look: "saucer", radius: 17, sway: 70 },
+  boss: { look: "mothership", radius: 32, sway: 25 },
+};
+
 // Power-ups drop from the sky carrying an easy word; type it to collect.
 const HEAL_AMOUNT = 3;
 const SLOW_FACTOR = 0.3; // enemies move at 30% speed during slow-mo
 const POWERUPS = {
   heal: { icon: "❤", color: "#06d6a0", hue: 160, weight: 45 },
   slow: { icon: "❄", color: "#4cc9f0", hue: 195, weight: 40, duration: 10 },
-  cheat: { icon: "★", color: "#ffd166", hue: 45, weight: 15, duration: 20 }, // rare
+  cheat: { icon: "★", color: "#ffd166", hue: 45, weight: 15, duration: 10 }, // rare
 };
 const POWERUP_INTERVAL = [10, 18]; // seconds between drops (min, max)
 
+// Powerdowns: rolled on a timer, announced, then forced on the player.
+const POWERDOWN_ROLL_EVERY = 10; // seconds
+const POWERDOWN_CHANCE = 0.15;
+const POWERDOWN_WARNING = 5; // seconds of warning before it hits
+const FAST_FACTOR = 1.8; // enemy speed and spawn rate during "faster words"
+const POWERDOWNS = {
+  blind: { icon: "👁", color: "#b388ff", duration: 10 },
+  fast: { icon: "⏩", color: "#ff9f43", duration: 10 },
+  fatal: { icon: "☠", color: "#ef476f", duration: 10 },
+};
+
+// Everything shown as a countdown bar, in display order.
+const TIMED_EFFECTS = { slow: POWERUPS.slow, cheat: POWERUPS.cheat, ...POWERDOWNS };
+
 function rand(min, max) {
   return min + Math.random() * (max - min);
+}
+
+function pick(list) {
+  return list[Math.floor(Math.random() * list.length)];
 }
 
 function updateSoundButtons() {
@@ -77,23 +104,11 @@ function resize() {
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  makeStars();
+  background.build(W, H, dpr);
 }
 
 function basePos() {
   return { x: W / 2, y: H - 46 };
-}
-
-// ---------- Background stars ----------
-let stars = [];
-function makeStars() {
-  const count = Math.round((W * H) / 6000);
-  stars = Array.from({ length: count }, () => ({
-    x: Math.random() * W,
-    y: Math.random() * H,
-    r: Math.random() * 1.4 + 0.2,
-    speed: Math.random() * 12 + 4,
-  }));
 }
 
 // ---------- Settings state ----------
@@ -134,18 +149,23 @@ function newGame() {
     best: loadBest(),
     hp: MAX_HP,
     wave: 0,
+    time: 0,
     enemies: [], // regular enemies, bosses and power-ups
     bullets: [],
     particles: [],
+    rings: [], // explosion shockwaves
     texts: [],
     queue: [], // enemies waiting to spawn this wave
     spawnTimer: 0,
     waveDelay: 0,
     powerupTimer: rand(...POWERUP_INTERVAL),
-    effects: { slow: 0, cheat: 0 }, // seconds left
+    powerdownTimer: POWERDOWN_ROLL_EVERY,
+    incoming: null, // { kind, t } while a powerdown warning is on screen
+    effects: { slow: 0, cheat: 0, blind: 0, fast: 0, fatal: 0 }, // seconds left
     banner: null,
     target: null,
     aim: -Math.PI / 2,
+    muzzle: 0,
     combo: 0,
     bestCombo: 0,
     kills: 0,
@@ -155,14 +175,22 @@ function newGame() {
     shake: 0,
     missFlash: 0,
     waveDamaged: false,
+    deathCause: null,
   };
 }
 
-// Music speeds up with each wave and drags during slow-mo.
+// Combined movement multiplier from slow-mo and "faster words".
+function speedFactor(g) {
+  return (g.effects.slow > 0 ? SLOW_FACTOR : 1) * (g.effects.fast > 0 ? FAST_FACTOR : 1);
+}
+
+// Music speeds up with each wave, drags in slow-mo, races in fast mode.
 music.tempo = () => {
   if (!game) return 108;
-  const base = Math.min(150, 104 + game.wave * 2);
-  return game.effects.slow > 0 ? base * 0.7 : base;
+  let bpm = Math.min(150, 104 + game.wave * 2);
+  if (game.effects.slow > 0) bpm *= 0.7;
+  if (game.effects.fast > 0) bpm *= 1.3;
+  return bpm;
 };
 
 // ---------- Waves ----------
@@ -201,20 +229,21 @@ function pickWord(tier) {
   // Prefer words whose first letter is not already on screen,
   // so the first keypress always picks an obvious target.
   for (let i = 0; i < 30; i++) {
-    const w = pool[Math.floor(Math.random() * pool.length)];
+    const w = pick(pool);
     if (!usedLetters.has(w[0]) && !usedWords.has(w)) return w;
   }
   for (let i = 0; i < 30; i++) {
-    const w = pool[Math.floor(Math.random() * pool.length)];
+    const w = pick(pool);
     if (!usedWords.has(w)) return w;
   }
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pick(pool);
 }
 
 function spawnEnemy({ boss }) {
   const g = game;
   const diff = DIFFICULTY[difficulty];
-  const word = boss ? pickWord("boss") : pickWord(pickTier(g.wave));
+  const tier = boss ? "boss" : pickTier(g.wave);
+  const style = LOOKS[tier];
 
   // Speed is expressed as "seconds to cross the screen" so it feels
   // the same on tall and short screens.
@@ -224,18 +253,27 @@ function spawnEnemy({ boss }) {
   const margin = Math.min(80, W * 0.12);
   g.enemies.push({
     kind: boss ? "boss" : "enemy",
+    look: style.look,
     x: rand(margin, W - margin),
-    y: -30,
-    word,
+    y: -40,
+    word: pickWord(tier),
     typed: 0,
     hits: 0,
     speed,
     boss,
-    radius: boss ? 26 : 14,
-    hue: boss ? 340 : rand(180, 280),
+    radius: style.radius * (style.look === "meteor" ? rand(0.9, 1.15) : 1),
+    hue: boss ? 330 : style.look === "fighter" ? pick([0, 25, 200, 280]) : rand(90, 200),
+    swayAmp: style.sway * rand(0.7, 1.3) * (Math.random() < 0.5 ? -1 : 1),
+    sway: Math.random() * Math.PI * 2,
+    angle: Math.PI / 2,
+    spin: Math.random() * Math.PI * 2,
+    trail: 0,
     doomed: false,
     flash: 0,
-    spin: Math.random() * Math.PI * 2,
+    hit: 0,
+    // Meteor shape: jagged outline and a few craters
+    shape: Array.from({ length: 9 }, () => rand(0.75, 1.1)),
+    craters: Array.from({ length: 3 }, () => ({ x: rand(-0.4, 0.4), y: rand(-0.4, 0.4), r: rand(0.12, 0.22) })),
   });
 }
 
@@ -267,8 +305,55 @@ function spawnPowerup() {
     hue: POWERUPS[power].hue,
     doomed: false,
     flash: 0,
+    hit: 0,
     spin: 0,
   });
+}
+
+// ---------- Powerdowns ----------
+function updatePowerdowns(dt) {
+  const g = game;
+  const active = Object.keys(POWERDOWNS).some((k) => g.effects[k] > 0);
+
+  if (g.incoming) {
+    const before = Math.ceil(g.incoming.t);
+    g.incoming.t -= dt;
+    if (g.incoming.t <= 0) {
+      const kind = g.incoming.kind;
+      g.incoming = null;
+      g.effects[kind] = POWERDOWNS[kind].duration;
+      g.shake = 0.3;
+      sound.powerdown();
+      announce(kind);
+    } else if (Math.ceil(g.incoming.t) !== before) {
+      sound.alarm(); // one beep per second of countdown
+    }
+    return;
+  }
+
+  // Only roll while nothing is active, so powerdowns never stack.
+  if (active) return;
+  g.powerdownTimer -= dt;
+  if (g.powerdownTimer <= 0) {
+    g.powerdownTimer = POWERDOWN_ROLL_EVERY;
+    if (Math.random() < POWERDOWN_CHANCE) {
+      g.incoming = { kind: pick(Object.keys(POWERDOWNS)), t: POWERDOWN_WARNING };
+      sound.alarm();
+    }
+  }
+}
+
+// Instant game over: fatal impact powerdown, or a boss reaching the base.
+function fatalHit(cause = "fatal") {
+  const g = game;
+  const base = basePos();
+  g.deathCause = cause;
+  g.hp = 0;
+  g.shake = 0.6;
+  burst(base.x, base.y, 350, 70, 1.8);
+  addRing(base.x, base.y, "239, 71, 111", 160);
+  sound.hurt();
+  endGame();
 }
 
 // ---------- Typing ----------
@@ -325,6 +410,7 @@ function advance(t) {
 }
 
 function miss() {
+  if (game.effects.fatal > 0) return fatalHit();
   game.combo = 0;
   game.missFlash = 0.25;
   sound.miss();
@@ -332,7 +418,10 @@ function miss() {
 
 function fire(target) {
   const base = basePos();
-  game.bullets.push({ x: base.x, y: base.y - 18, target });
+  const a = game.aim;
+  // Bullets leave from the barrel tip
+  game.bullets.push({ x: base.x + Math.cos(a) * 30, y: base.y + Math.sin(a) * 30, dx: 0, dy: -1, target });
+  game.muzzle = 0.06;
   sound.shoot();
 }
 
@@ -348,10 +437,32 @@ function burst(x, y, hue, count, power = 1) {
       vy: Math.sin(a) * s,
       life: rand(0.4, 0.9),
       max: 0.9,
-      size: rand(1, 3.5),
+      size: rand(1, 3.2),
       hue,
     });
   }
+}
+
+function addRing(x, y, rgb, maxR) {
+  game.rings.push({ x, y, rgb, r: 4, maxR, life: 0.5 });
+}
+
+// Exhaust / fire trail behind a moving enemy.
+function emitTrail(e, vx, vy) {
+  const v = Math.hypot(vx, vy) || 1;
+  const nx = vx / v;
+  const ny = vy / v;
+  const hue = e.look === "meteor" ? rand(10, 45) : e.look === "mothership" ? 320 : e.hue;
+  game.particles.push({
+    x: e.x - nx * e.radius * 0.9 + rand(-2, 2),
+    y: e.y - ny * e.radius * 0.9 + rand(-2, 2),
+    vx: -nx * rand(20, 60) + rand(-12, 12),
+    vy: -ny * rand(20, 60) + rand(-12, 12),
+    life: rand(0.25, 0.5),
+    max: 0.5,
+    size: rand(1.2, e.look === "meteor" ? 3.6 : 2.4),
+    hue,
+  });
 }
 
 function floatText(x, y, text, color) {
@@ -367,9 +478,12 @@ function killEnemy(e) {
   const multiplier = 1 + Math.min(g.combo, 20) * 0.1;
   const points = Math.round(e.word.length * 10 * multiplier * (e.boss ? 3 : 1));
   g.score += points;
-  burst(e.x, e.y, e.hue, e.boss ? 60 : 24, e.boss ? 1.6 : 1);
+  const hue = e.look === "meteor" ? 30 : e.hue;
+  burst(e.x, e.y, hue, e.boss ? 80 : 28, e.boss ? 1.8 : 1);
+  burst(e.x, e.y, 45, e.boss ? 30 : 10, 0.6);
+  addRing(e.x, e.y, "255, 220, 150", e.boss ? 140 : 55);
   floatText(e.x, e.y, `+${points}`, "#ffd166");
-  if (e.boss) g.shake = 0.3;
+  if (e.boss) g.shake = 0.35;
   removeEnemy(e);
   sound.kill();
 }
@@ -381,9 +495,19 @@ function collectPowerup(e) {
   else g.effects[e.power] = p.duration;
   g.score += 25;
   burst(e.x, e.y, p.hue, 36, 1.2);
+  addRing(e.x, e.y, "255, 255, 255", 60);
   floatText(e.x, e.y, `${p.icon} ${lang().text[e.power]}`, p.color);
   removeEnemy(e);
   sound.powerup();
+  announce(e.power);
+}
+
+// Voice line, e.g. "Power up! Cheat code!". Powerdowns use a lower, grimmer pitch.
+function announce(kind) {
+  voice.say(lang().announce[kind], lang().voiceLang, {
+    pitch: kind in POWERDOWNS ? 0.75 : 1.2,
+    fallback: LANGS.en.announce[kind],
+  });
 }
 
 function removeEnemy(e) {
@@ -395,12 +519,21 @@ function removeEnemy(e) {
 
 function damageBase(e) {
   const g = game;
-  const dmg = e.boss ? 3 : 1;
+  if (e.boss) {
+    removeEnemy(e);
+    return fatalHit("boss"); // a boss reaching the base is always lethal
+  }
+  if (g.effects.fatal > 0) {
+    removeEnemy(e);
+    return fatalHit();
+  }
+  const dmg = 1;
   g.hp = Math.max(0, g.hp - dmg);
   g.combo = 0;
   g.waveDamaged = true;
   g.shake = 0.4;
   burst(e.x, e.y, 0, 40, 1.3);
+  addRing(e.x, e.y, "239, 71, 111", 70);
   floatText(e.x, e.y - 20, `-${dmg} HP`, "#ef476f");
   removeEnemy(e);
   sound.hurt();
@@ -416,22 +549,25 @@ function update(dt) {
   const g = game;
   const base = basePos();
 
+  g.time += dt;
   g.playTime += dt;
   g.shake = Math.max(0, g.shake - dt);
   g.missFlash = Math.max(0, g.missFlash - dt);
-  g.effects.slow = Math.max(0, g.effects.slow - dt);
-  g.effects.cheat = Math.max(0, g.effects.cheat - dt);
+  g.muzzle = Math.max(0, g.muzzle - dt);
+  for (const k of Object.keys(g.effects)) g.effects[k] = Math.max(0, g.effects[k] - dt);
   if (g.banner) {
     g.banner.t -= dt;
     if (g.banner.t <= 0) g.banner = null;
   }
 
-  // Spawning
+  updatePowerdowns(dt);
+
+  // Spawning (faster during the "faster words" powerdown)
   if (g.waveDelay > 0) {
     g.waveDelay -= dt;
   } else {
     if (g.queue.length > 0) {
-      g.spawnTimer -= dt;
+      g.spawnTimer -= dt * (g.effects.fast > 0 ? FAST_FACTOR : 1);
       if (g.spawnTimer <= 0) {
         spawnEnemy(g.queue.shift());
         g.spawnTimer = g.spawnInterval * rand(0.7, 1.3);
@@ -445,9 +581,10 @@ function update(dt) {
   }
 
   // Movement
-  const slow = g.effects.slow > 0 ? SLOW_FACTOR : 1;
+  const sf = speedFactor(g);
   for (const e of [...g.enemies]) {
     e.flash = Math.max(0, e.flash - dt);
+    e.hit = Math.max(0, e.hit - dt);
 
     if (e.kind === "powerup") {
       e.y += e.speed * dt;
@@ -459,12 +596,28 @@ function update(dt) {
       continue;
     }
 
+    // Head for the base, weaving side to side
     const dx = base.x - e.x;
     const dy = base.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
-    e.x += (dx / d) * e.speed * slow * dt;
-    e.y += (dy / d) * e.speed * slow * dt;
-    e.spin += dt * (e.boss ? 0.8 : 2) * slow;
+    const ux = dx / d;
+    const uy = dy / d;
+    e.sway += dt * sf * 1.8;
+    const side = Math.sin(e.sway) * e.swayAmp * Math.min(1, d / 150); // settle near the base
+    const vx = (ux * e.speed - uy * side) * sf;
+    const vy = (uy * e.speed + ux * side) * sf;
+    e.x = Math.max(12, Math.min(W - 12, e.x + vx * dt));
+    e.y += vy * dt;
+    e.angle = Math.atan2(vy, vx);
+    e.spin += dt * (e.look === "meteor" ? 1.5 : 1) * Math.max(0.5, sf);
+
+    if (e.look !== "saucer") {
+      e.trail -= dt;
+      if (e.trail <= 0) {
+        e.trail = e.look === "meteor" ? 0.025 : 0.04;
+        emitTrail(e, vx, vy);
+      }
+    }
 
     if (d < e.radius + 24) {
       // A word that was already finished still counts as a kill.
@@ -483,6 +636,7 @@ function update(dt) {
     if (d <= step + e.radius * 0.5) {
       g.bullets = g.bullets.filter((x) => x !== b);
       e.hits++;
+      e.hit = 0.06;
       if (e.kind !== "powerup") {
         // Knock the enemy back a little on every hit
         const kx = e.x - base.x;
@@ -491,15 +645,17 @@ function update(dt) {
         e.x += (kx / kd) * (e.boss ? 2 : 5);
         e.y += (ky / kd) * (e.boss ? 2 : 5);
       }
-      burst(e.x, e.y, 45, 4, 0.5);
+      burst(b.x, b.y, 45, 5, 0.5);
       if (e.doomed && e.hits >= e.word.length) killEnemy(e);
     } else {
-      b.x += ((e.x - b.x) / d) * step;
-      b.y += ((e.y - b.y) / d) * step;
+      b.dx = (e.x - b.x) / d;
+      b.dy = (e.y - b.y) / d;
+      b.x += b.dx * step;
+      b.y += b.dy * step;
     }
   }
 
-  // Particles & floating text
+  // Particles, rings & floating text
   for (const p of g.particles) {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
@@ -508,6 +664,12 @@ function update(dt) {
     p.life -= dt;
   }
   g.particles = g.particles.filter((p) => p.life > 0);
+
+  for (const r of g.rings) {
+    r.life -= dt;
+    r.r += (r.maxR - r.r) * Math.min(1, dt * 9);
+  }
+  g.rings = g.rings.filter((r) => r.life > 0);
 
   for (const t of g.texts) {
     t.y -= 40 * dt;
@@ -540,33 +702,18 @@ function draw(dt) {
   ctx.save();
   ctx.clearRect(0, 0, W, H);
 
-  // Background
-  const bg = ctx.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, "#050816");
-  bg.addColorStop(1, "#0d1530");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
+  const g = game;
+  const warp = g && g.effects.fast > 0 ? FAST_FACTOR * 2 : 1;
+  background.draw(ctx, dt, g && g.effects.slow > 0 ? SLOW_FACTOR : 1, warp);
 
-  const starSpeed = game && game.effects.slow > 0 ? SLOW_FACTOR : 1;
-  for (const s of stars) {
-    s.y += s.speed * dt * starSpeed;
-    if (s.y > H) {
-      s.y = 0;
-      s.x = Math.random() * W;
-    }
-    ctx.fillStyle = `rgba(200, 215, 255, ${0.3 + s.r * 0.3})`;
-    ctx.fillRect(s.x, s.y, s.r, s.r);
-  }
-
-  if (!game) {
+  if (!g) {
     ctx.restore();
     return;
   }
-  const g = game;
 
   // Power-up tints
   if (g.effects.slow > 0) {
-    ctx.fillStyle = "rgba(76, 201, 240, 0.07)";
+    ctx.fillStyle = "rgba(76, 201, 240, 0.08)";
     ctx.fillRect(0, 0, W, H);
   }
   if (g.effects.cheat > 0) {
@@ -574,9 +721,29 @@ function draw(dt) {
     ctx.fillRect(0, 0, W, H);
   }
 
+  ctx.save();
   if (g.shake > 0) {
     const m = g.shake * 14;
     ctx.translate((Math.random() - 0.5) * m, (Math.random() - 0.5) * m);
+  }
+
+  // Additive particles (trails, sparks, explosions) behind the ships
+  ctx.globalCompositeOperation = "lighter";
+  for (const p of g.particles) {
+    const a = Math.max(0, p.life / p.max);
+    ctx.fillStyle = `hsla(${p.hue}, 95%, 60%, ${a})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * (0.5 + a * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = "source-over";
+
+  for (const r of g.rings) {
+    ctx.strokeStyle = `rgba(${r.rgb}, ${Math.max(0, r.life * 2)})`;
+    ctx.lineWidth = 3 * r.life * 2;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   drawBase(g);
@@ -585,29 +752,31 @@ function draw(dt) {
   const order = g.enemies.filter((e) => e !== g.target);
   if (g.target) order.push(g.target);
   for (const e of order) {
-    if (e.kind === "powerup") drawPowerup(e);
-    else drawEnemy(e, e === g.target);
-    drawLabel(e, e === g.target);
+    if (e.kind === "powerup") sprites.orb(ctx, e, POWERUPS[e.power]);
+    else sprites.draw(ctx, e);
+    if (e === g.target) sprites.reticle(ctx, e, g.time);
   }
+  for (const e of order) drawLabel(e, e === g.target);
 
-  // Bullets
-  ctx.fillStyle = "#ffd166";
-  ctx.shadowColor = "#ffd166";
-  ctx.shadowBlur = 10;
+  // Laser bolts
+  ctx.lineCap = "round";
   for (const b of g.bullets) {
+    const tx = b.x - b.dx * 16;
+    const ty = b.y - b.dy * 16;
+    ctx.strokeStyle = "rgba(255, 200, 80, 0.35)";
+    ctx.lineWidth = 6;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.strokeStyle = "#fff4cf";
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
-  ctx.shadowBlur = 0;
+  ctx.restore(); // end shake
 
-  // Particles
-  for (const p of g.particles) {
-    ctx.globalAlpha = Math.max(0, p.life / p.max);
-    ctx.fillStyle = `hsl(${p.hue}, 90%, 65%)`;
-    ctx.fillRect(p.x, p.y, p.size, p.size);
-  }
-  ctx.globalAlpha = 1;
+  if (g.effects.blind > 0) drawBlindMask(g);
+  if (g.effects.fatal > 0) drawFatalVignette(g);
 
   // Floating text
   ctx.direction = lang().dir;
@@ -625,12 +794,16 @@ function draw(dt) {
     const a = Math.min(1, g.banner.t, 2.2 - g.banner.t + 0.2);
     ctx.globalAlpha = Math.max(0, a);
     ctx.fillStyle = "#e6ecff";
+    ctx.shadowColor = "rgba(76, 201, 240, 0.8)";
+    ctx.shadowBlur = 20;
     ctx.font = `800 ${Math.min(48, W / 10)}px system-ui, sans-serif`;
     ctx.fillText(g.banner.text, W / 2, H / 2 - 20);
+    ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
   }
 
   drawEffectTimers(g);
+  drawPowerdownAlert(g);
 
   // Red edge flash on typo
   if (g.missFlash > 0) {
@@ -644,88 +817,79 @@ function draw(dt) {
 
 function drawBase(g) {
   const base = basePos();
-
-  // Ground glow
-  const ground = ctx.createLinearGradient(0, H - 70, 0, H);
-  ground.addColorStop(0, "rgba(76, 201, 240, 0)");
-  ground.addColorStop(1, "rgba(76, 201, 240, 0.15)");
-  ctx.fillStyle = ground;
-  ctx.fillRect(0, H - 70, W, 70);
-
-  // Shield arc, fades as HP drops
   const hpRatio = g.hp / MAX_HP;
-  ctx.strokeStyle = `rgba(76, 201, 240, ${0.15 + hpRatio * 0.45})`;
-  ctx.lineWidth = 3;
+
+  // Shield dome, fades as HP drops
+  const shield = ctx.createRadialGradient(base.x, base.y, 20, base.x, base.y, 46);
+  shield.addColorStop(0, "rgba(76, 201, 240, 0)");
+  shield.addColorStop(1, `rgba(76, 201, 240, ${0.08 + hpRatio * 0.18})`);
+  ctx.fillStyle = shield;
   ctx.beginPath();
-  ctx.arc(base.x, base.y, 40, Math.PI, Math.PI * 2);
+  ctx.arc(base.x, base.y, 46, Math.PI, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = `rgba(140, 225, 255, ${0.2 + hpRatio * 0.5})`;
+  ctx.lineWidth = 2;
   ctx.stroke();
 
-  // Turret barrel (gold while cheat mode is on)
+  // Platform
+  ctx.fillStyle = "#16224a";
+  ctx.strokeStyle = "rgba(140, 225, 255, 0.6)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(base.x - 34, base.y + 22);
+  ctx.lineTo(base.x - 22, base.y + 4);
+  ctx.lineTo(base.x + 22, base.y + 4);
+  ctx.lineTo(base.x + 34, base.y + 22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Barrel (gold while cheat mode is on) and muzzle flash
   ctx.save();
   ctx.translate(base.x, base.y);
   ctx.rotate(g.aim);
-  ctx.fillStyle = g.effects.cheat > 0 ? "#ffd166" : "#c8d3f5";
-  ctx.fillRect(0, -4, 30, 8);
+  const barrel = ctx.createLinearGradient(0, -5, 0, 5);
+  const tone = g.effects.cheat > 0 ? ["#fff1c2", "#ffd166", "#a67c1a"] : ["#eef3ff", "#9fb0d9", "#4a5a85"];
+  barrel.addColorStop(0, tone[0]);
+  barrel.addColorStop(0.5, tone[1]);
+  barrel.addColorStop(1, tone[2]);
+  ctx.fillStyle = barrel;
+  ctx.fillRect(4, -5, 28, 10);
+  ctx.fillStyle = "#2b3a6b";
+  ctx.fillRect(26, -6, 6, 12);
+  if (g.muzzle > 0) {
+    ctx.globalCompositeOperation = "lighter";
+    const flash = ctx.createRadialGradient(36, 0, 0, 36, 0, 14);
+    flash.addColorStop(0, "rgba(255, 245, 200, 1)");
+    flash.addColorStop(1, "rgba(255, 180, 60, 0)");
+    ctx.fillStyle = flash;
+    ctx.beginPath();
+    ctx.arc(36, 0, 14, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 
-  // Turret body
-  ctx.fillStyle = "#1c2a52";
+  // Turret head
+  const head = ctx.createRadialGradient(base.x - 5, base.y - 6, 2, base.x, base.y, 18);
+  head.addColorStop(0, "#5f7bd6");
+  head.addColorStop(1, "#18244f");
+  ctx.fillStyle = head;
   ctx.strokeStyle = "#4cc9f0";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.arc(base.x, base.y, 18, 0, Math.PI * 2);
+  ctx.arc(base.x, base.y, 16, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
-}
-
-function drawEnemy(e, isTarget) {
-  ctx.save();
-  ctx.translate(e.x, e.y);
-  ctx.rotate(e.spin);
-  const sides = e.boss ? 6 : 4;
+  ctx.fillStyle = g.effects.fatal > 0 ? "#ef476f" : "#4cc9f0";
   ctx.beginPath();
-  for (let i = 0; i < sides; i++) {
-    const a = (i / sides) * Math.PI * 2;
-    ctx.lineTo(Math.cos(a) * e.radius, Math.sin(a) * e.radius);
-  }
-  ctx.closePath();
-  const color = e.flash > 0 ? "#ef476f" : `hsl(${e.hue}, 80%, 60%)`;
-  ctx.fillStyle = `hsla(${e.hue}, 80%, 30%, 0.8)`;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = isTarget ? 18 : 8;
+  ctx.arc(base.x, base.y, 4 + Math.sin(g.time * 4), 0, Math.PI * 2);
   ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawPowerup(e) {
-  const p = POWERUPS[e.power];
-  const r = e.radius * (1 + Math.sin(e.spin * 5) * 0.08);
-  ctx.save();
-  ctx.shadowColor = p.color;
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = `hsla(${p.hue}, 80%, 22%, 0.9)`;
-  ctx.strokeStyle = p.color;
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = p.color;
-  ctx.font = "16px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(p.icon, e.x, e.y + 1);
-  ctx.restore();
 }
 
 function drawLabel(e, isTarget) {
   // Spaces in boss sentences are shown as "·" so players can see them.
   const display = e.word.replace(/ /g, "·");
-  const padX = 8;
+  const padX = 9;
   const accent = e.kind === "powerup" ? POWERUPS[e.power].color : "#ffd166";
 
   let fontSize = e.boss ? 18 : 15;
@@ -743,16 +907,38 @@ function drawLabel(e, isTarget) {
   const rest = display.slice(e.typed);
   const typedW = ctx.measureText(typed).width;
   const labelW = full + padX * 2;
-  const labelH = fontSize + 10;
+  const labelH = fontSize + 12;
   const lx = Math.max(4, Math.min(W - labelW - 4, e.x - labelW / 2));
-  const ly = e.y + e.radius + 8;
+  const ly = e.y + e.radius + 12;
 
-  ctx.fillStyle = isTarget ? "rgba(40, 30, 0, 0.9)" : "rgba(5, 8, 20, 0.8)";
-  ctx.strokeStyle = isTarget || e.kind === "powerup" ? accent : "rgba(255, 255, 255, 0.15)";
-  ctx.lineWidth = isTarget ? 2 : 1;
-  roundRect(lx, ly, labelW, labelH, 6);
+  // Pointer from the tag up to its ship
+  const px = Math.max(lx + 8, Math.min(lx + labelW - 8, e.x));
+  ctx.fillStyle = isTarget ? "rgba(60, 42, 0, 0.92)" : "rgba(8, 12, 32, 0.85)";
+  ctx.beginPath();
+  ctx.moveTo(px - 6, ly + 1);
+  ctx.lineTo(px, ly - 6);
+  ctx.lineTo(px + 6, ly + 1);
   ctx.fill();
+
+  // Tag body
+  if (isTarget) {
+    ctx.shadowColor = "rgba(255, 209, 102, 0.6)";
+    ctx.shadowBlur = 14;
+  }
+  roundRect(lx, ly, labelW, labelH, labelH / 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = isTarget || e.kind === "powerup" ? accent : "rgba(160, 190, 255, 0.25)";
+  ctx.lineWidth = isTarget ? 2 : 1;
   ctx.stroke();
+
+  // Typed progress bar along the bottom of the tag
+  if (e.typed > 0) {
+    ctx.fillStyle = "rgba(255, 209, 102, 0.35)";
+    const pw = (labelW - labelH) * (e.typed / e.word.length);
+    const rtl = lang().dir === "rtl";
+    ctx.fillRect(rtl ? lx + labelW - labelH / 2 - pw : lx + labelH / 2, ly + labelH - 3, pw, 2);
+  }
 
   ctx.textBaseline = "middle";
   const ty = ly + labelH / 2 + 1;
@@ -777,38 +963,107 @@ function drawLabel(e, isTarget) {
   ctx.textBaseline = "alphabetic";
 }
 
-// Countdown bars for active timed power-ups, in the top corner.
+// Blind mode: darkness everywhere except a circle around the base.
+function drawBlindMask(g) {
+  const base = basePos();
+  const left = g.effects.blind;
+  const elapsed = POWERDOWNS.blind.duration - left;
+  const k = Math.min(1, elapsed / 0.8, left / 0.8); // ease in and out
+  const small = Math.max(140, Math.min(W, H) * 0.36);
+  const big = Math.hypot(W, H);
+  const r = big + (small - big) * k * k * (3 - 2 * k);
+
+  const mask = ctx.createRadialGradient(base.x, base.y, r * 0.75, base.x, base.y, r);
+  mask.addColorStop(0, "rgba(2, 3, 10, 0)");
+  mask.addColorStop(1, "rgba(2, 3, 10, 0.98)");
+  ctx.fillStyle = mask;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// Fatal impact: pulsing red edges.
+function drawFatalVignette(g) {
+  const pulse = 0.3 + Math.sin(g.time * 6) * 0.12;
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) / 2);
+  v.addColorStop(0, "rgba(239, 71, 111, 0)");
+  v.addColorStop(1, `rgba(239, 71, 111, ${pulse})`);
+  ctx.fillStyle = v;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// Warning box shown during the countdown before a powerdown hits.
+function drawPowerdownAlert(g) {
+  const inc = g.incoming;
+  if (!inc) return;
+  const L = lang();
+  const p = POWERDOWNS[inc.kind];
+  const blink = Math.sin(g.time * 12) > 0;
+  const w = Math.min(W - 32, 420);
+  const h = 118;
+  const x = (W - w) / 2;
+  const y = Math.max(70, H * 0.16);
+
+  ctx.save();
+  ctx.fillStyle = "rgba(28, 4, 12, 0.9)";
+  ctx.shadowColor = p.color;
+  ctx.shadowBlur = blink ? 30 : 12;
+  roundRect(x, y, w, h, 14);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = blink ? p.color : "rgba(239, 71, 111, 0.6)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.direction = L.dir;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = blink ? "#ff8fa3" : "#ffd0da";
+  ctx.font = "800 14px system-ui, sans-serif";
+  ctx.fillText(`⚠ ${L.text.powerdownIncoming} · ${Math.ceil(inc.t)} ⚠`, W / 2, y + 24);
+  ctx.fillStyle = p.color;
+  ctx.font = "800 26px system-ui, sans-serif";
+  ctx.fillText(`${p.icon} ${L.text[inc.kind]}`, W / 2, y + 58);
+  ctx.fillStyle = "#c9d1ec";
+  ctx.font = "600 13px system-ui, sans-serif";
+  ctx.fillText(L.text[`${inc.kind}Desc`], W / 2, y + 88);
+
+  // Countdown bar
+  ctx.fillStyle = p.color;
+  ctx.fillRect(x + 14, y + h - 10, (w - 28) * (inc.t / POWERDOWN_WARNING), 3);
+  ctx.restore();
+}
+
+// Countdown bars for active timed effects, in the top corner.
 function drawEffectTimers(g) {
   const rtl = lang().dir === "rtl";
-  const w = 170;
+  const w = 180;
   const h = 26;
   let y = 12;
-  for (const kind of ["slow", "cheat"]) {
+  for (const [kind, meta] of Object.entries(TIMED_EFFECTS)) {
     const left = g.effects[kind];
     if (left <= 0) continue;
-    const p = POWERUPS[kind];
     const x = rtl ? W - 12 - w : 12;
+    const bad = kind in POWERDOWNS;
 
-    ctx.fillStyle = "rgba(5, 8, 20, 0.8)";
+    ctx.fillStyle = bad ? "rgba(30, 5, 12, 0.85)" : "rgba(5, 8, 20, 0.8)";
     roundRect(x, y, w, h, 6);
     ctx.fill();
-    ctx.fillStyle = p.color;
+    ctx.fillStyle = meta.color;
     ctx.globalAlpha = 0.3;
-    const fillW = w * (left / p.duration);
+    const fillW = w * (left / meta.duration);
     roundRect(rtl ? x + w - fillW : x, y, fillW, h, 6);
     ctx.fill();
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = p.color;
+    ctx.strokeStyle = meta.color;
     ctx.lineWidth = 1;
     roundRect(x, y, w, h, 6);
     ctx.stroke();
 
     ctx.fillStyle = "#ffffff";
-    ctx.font = `700 13px system-ui, sans-serif`;
+    ctx.font = "700 13px system-ui, sans-serif";
     ctx.textBaseline = "middle";
     ctx.direction = lang().dir;
     ctx.textAlign = rtl ? "right" : "left";
-    const label = `${p.icon} ${lang().text[kind]} · ${lang().seconds(Math.ceil(left))}`;
+    const label = `${meta.icon} ${lang().text[kind]} · ${lang().seconds(Math.ceil(left))}`;
     ctx.fillText(label, rtl ? x + w - 10 : x + 10, y + h / 2 + 1);
     ctx.textBaseline = "alphabetic";
     y += h + 6;
@@ -913,6 +1168,7 @@ function pauseGame() {
   if (phase !== "playing") return;
   phase = "paused";
   music.stop();
+  voice.stop();
   showPanel("pause");
 }
 
@@ -928,6 +1184,7 @@ function quitToMenu() {
   phase = "menu";
   game = null;
   music.stop();
+  voice.stop();
   syncMenuButtons();
   showPanel("start");
 }
@@ -936,6 +1193,7 @@ function endGame() {
   const g = game;
   phase = "over";
   music.stop();
+  voice.stop();
   const { wpm, acc } = stats();
   const isRecord = g.score > g.best;
   if (isRecord) storage.set(bestKey(), g.score);
@@ -949,9 +1207,10 @@ function endGame() {
   updateHud();
 
   const L = lang();
-  let msg = L.heldOut(g.wave);
-  if (isRecord) msg = L.newBest(L.text[difficulty]);
-  else if (rank) msg = L.rank(rank);
+  const deathMessages = { fatal: L.text.fatalDeath, boss: L.text.bossDeath };
+  let msg = deathMessages[g.deathCause] || L.heldOut(g.wave);
+  if (isRecord) msg += ` ${L.newBest(L.text[difficulty])}`;
+  else if (rank) msg += ` ${L.rank(rank)}`;
   document.getElementById("over-msg").textContent = msg;
   document.getElementById("res-score").textContent = g.score;
   document.getElementById("res-wave").textContent = g.wave;
@@ -964,7 +1223,7 @@ function endGame() {
   // Small delay so the final explosion is visible
   setTimeout(() => {
     if (phase === "over") showPanel("over");
-  }, 700);
+  }, 900);
 }
 
 function focusInput() {
@@ -1039,6 +1298,7 @@ pauseBtn.addEventListener("click", () => {
 muteBtn.addEventListener("click", () => {
   sound.muted = !sound.muted;
   storage.set("td.muted", sound.muted);
+  if (sound.muted) voice.stop();
   updateSoundButtons();
   if (phase === "playing") focusInput();
 });
@@ -1106,6 +1366,7 @@ function frame(now) {
 
 window.addEventListener("resize", resize);
 resize();
+voice.init();
 updateSoundButtons();
 applyLanguage();
 showPanel("start");

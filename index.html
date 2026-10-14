@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Type the words to shoot down incoming enemies before they reach your base.">
-  <title>Typing Defence</title>
+  <title>Typing Defense</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -25,13 +25,13 @@
       <div class="stat"><span class="label" data-i18n="wpm">WPM</span><span class="value" id="hud-wpm">0</span></div>
       <div class="stat"><span class="label" data-i18n="acc">Acc</span><span class="value" id="hud-acc">100%</span></div>
       <button class="icon-btn" id="btn-music" type="button" aria-label="Toggle music" title="Toggle music">🎵</button>
-      <button class="icon-btn" id="btn-mute" type="button" aria-label="Toggle sound effects" title="Toggle sound effects">🔊</button>
+      <button class="icon-btn" id="btn-mute" type="button" aria-label="Toggle sound effects and voice" title="Toggle sound effects and voice">🔊</button>
       <button class="icon-btn" id="btn-pause" type="button" aria-label="Pause" title="Pause (Esc)">⏸</button>
     </div>
   </header>
 
   <main class="stage" id="stage">
-    <canvas id="game" aria-label="Typing Defence game field"></canvas>
+    <canvas id="game" aria-label="Typing Defense game field"></canvas>
 
     <!-- Hidden input so mobile devices open their keyboard -->
     <input id="mobile-input" class="mobile-input" type="text" autocomplete="off" autocorrect="off"
@@ -43,14 +43,15 @@
           <button type="button" class="seg lang" data-lang="en" lang="en" role="radio" aria-checked="true">English</button>
           <button type="button" class="seg lang" data-lang="he" lang="he" role="radio" aria-checked="false">עברית</button>
         </div>
-        <h1 data-i18n="title">Typing <span class="accent">Defence</span></h1>
+        <h1 data-i18n="title">Typing <span class="accent">Defense</span></h1>
         <p class="lead" data-i18n="lead">Enemies are coming for your base. Type the word on an enemy to shoot it down.</p>
         <ul class="howto">
           <li data-i18n="how1">Type the <strong>first letter</strong> of a word to lock on.</li>
           <li data-i18n="how2">Finish the word to destroy the enemy.</li>
           <li data-i18n="how3">Typos break your <strong>combo</strong>. Clean waves repair the base.</li>
-          <li data-i18n="how4">Every 5th wave brings a <strong>boss</strong> with a whole sentence to type.</li>
+          <li data-i18n="how4">Every 5th wave brings a <strong>boss</strong> with a whole sentence to type. If it reaches you, it's game over!</li>
           <li data-i18n="how5">Shoot glowing <strong>power-ups</strong>: ❤ repair, ❄ slow-mo, ★ cheat mode (rare).</li>
+          <li data-i18n="how6">Watch out for random <strong>powerdowns</strong>: 👁 blind mode, ⏩ faster words, ☠ fatal impact.</li>
         </ul>
         <label class="name-field">
           <span class="label" data-i18n="nameLabel">Your name</span>
@@ -104,6 +105,8 @@
   <script src="words.js"></script>
   <script src="i18n.js"></script>
   <script src="audio.js"></script>
+  <script src="background.js"></script>
+  <script src="sprites.js"></script>
   <script src="leaderboard.js"></script>
   <script src="script.js"></script>
 </body>

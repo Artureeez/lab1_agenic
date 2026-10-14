@@ -1,4 +1,4 @@
-# Typing Defence
+# Typing Defense
 
 A browser typing game. Enemies fly toward your base and each one carries a word. Type the word to shoot the enemy down before it reaches you.
 
@@ -10,8 +10,12 @@ Built with plain **HTML, CSS and JavaScript**: no build step and no dependencies
 - Keep typing to finish the word. Each correct letter fires a shot.
 - A typo resets your **combo**. A higher combo gives more points per kill.
 - If you clear a wave without taking damage, the base repairs 1 HP.
-- Every 5th wave has a **boss** with a short sentence to type (spaces count, shown as `·`). It does 3 damage if it reaches you.
+- Every 5th wave has a **boss** with a short sentence to type (spaces count, shown as `·`). If it reaches your base, the game is over instantly.
 - `Enter` starts the game, and `Esc` pauses it.
+
+## Enemies
+
+Each word's difficulty decides which enemy carries it: easy words ride **meteors**, medium words fly **fighter jets**, hard words come in **UFOs**, and bosses arrive in a **mothership**.
 
 ## Power-ups
 
@@ -21,7 +25,17 @@ Glowing orbs sometimes fall from the sky carrying an easy word. Type the word to
 | --------------- | --------------------------------------------------- | --------- |
 | ❤ Repair        | Restores 3 base HP                                  | Common    |
 | ❄ Slow-mo       | Enemies move at 30% speed for 10 seconds            | Common    |
-| ★ Cheat mode    | Any key counts as the correct letter for 20 seconds | Rare      |
+| ★ Cheat mode    | Any key counts as the correct letter for 10 seconds | Rare      |
+
+## Powerdowns
+
+Every 10 seconds there's a 15% chance of a powerdown. A warning with its name and a 5-second countdown appears first, then it lasts 10 seconds. Only one can be active at a time.
+
+| Powerdown       | Effect                                                         |
+| --------------- | -------------------------------------------------------------- |
+| 👁 Blind mode   | Darkness covers the screen except for a small circle around the base |
+| ⏩ Faster words | Enemies fly and spawn 1.8× faster                              |
+| ☠ Fatal impact  | A single typo, or any enemy reaching the base, ends the game   |
 
 ## Name and leaderboard
 
@@ -29,7 +43,9 @@ Enter your name on the start screen. The top 10 scores are saved in your browser
 
 ## Sound
 
-Background music is generated in the browser while you play, so there are no audio files. It speeds up in later waves and slows down during slow-mo. 🎵 turns the music on and off, and 🔊 does the same for sound effects.
+Background music is generated in the browser while you play, so there are no audio files. It speeds up in later waves and slows down during slow-mo. An announcer voice calls out every power-up and powerdown when it takes effect, for example *"Power up! Cheat code!"* or *"Power down! Blind mode!"*. It uses the browser's built-in speech. Hebrew mode speaks Hebrew if the device has a Hebrew voice, and English otherwise.
+
+🎵 turns the music on and off. 🔊 turns sound effects and the announcer voice on and off.
 
 ## Languages
 
@@ -47,8 +63,10 @@ You don't need to change your computer's keyboard language. The game reads which
 | `words.js`       | Word lists per language (easy, medium, hard, boss sentences) |
 | `i18n.js`        | Menu text and keyboard layouts per language         |
 | `audio.js`       | Sound effects and generated background music        |
+| `background.js`  | Painted space scene: nebula, planets, city skyline, stars |
+| `sprites.js`     | Drawings of meteors, fighters, UFOs, the mothership and power-up orbs |
 | `leaderboard.js` | Local top-10 leaderboard                            |
-| `script.js`      | Game loop, typing, power-ups, rendering, menus      |
+| `script.js`      | Game loop, typing, power-ups, powerdowns, menus     |
 
 ## Run locally
 
