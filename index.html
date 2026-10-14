@@ -24,7 +24,8 @@
       <div class="stat"><span class="label" data-i18n="combo">Combo</span><span class="value" id="hud-combo">x0</span></div>
       <div class="stat"><span class="label" data-i18n="wpm">WPM</span><span class="value" id="hud-wpm">0</span></div>
       <div class="stat"><span class="label" data-i18n="acc">Acc</span><span class="value" id="hud-acc">100%</span></div>
-      <button class="icon-btn" id="btn-mute" type="button" aria-label="Toggle sound" title="Toggle sound">🔊</button>
+      <button class="icon-btn" id="btn-music" type="button" aria-label="Toggle music" title="Toggle music">🎵</button>
+      <button class="icon-btn" id="btn-mute" type="button" aria-label="Toggle sound effects" title="Toggle sound effects">🔊</button>
       <button class="icon-btn" id="btn-pause" type="button" aria-label="Pause" title="Pause (Esc)">⏸</button>
     </div>
   </header>
@@ -48,15 +49,28 @@
           <li data-i18n="how1">Type the <strong>first letter</strong> of a word to lock on.</li>
           <li data-i18n="how2">Finish the word to destroy the enemy.</li>
           <li data-i18n="how3">Typos break your <strong>combo</strong>. Clean waves repair the base.</li>
-          <li data-i18n="how4">Every 5th wave brings a <strong>boss</strong>.</li>
+          <li data-i18n="how4">Every 5th wave brings a <strong>boss</strong> with a whole sentence to type.</li>
+          <li data-i18n="how5">Shoot glowing <strong>power-ups</strong>: ❤ repair, ❄ slow-mo, ★ cheat mode (rare).</li>
         </ul>
+        <label class="name-field">
+          <span class="label" data-i18n="nameLabel">Your name</span>
+          <input id="player-name" type="text" maxlength="16" autocomplete="nickname" spellcheck="false">
+        </label>
         <div class="segmented" role="radiogroup" aria-label="Difficulty">
           <button type="button" class="seg diff" data-diff="easy" data-i18n="easy" role="radio" aria-checked="false">Easy</button>
           <button type="button" class="seg diff" data-diff="normal" data-i18n="normal" role="radio" aria-checked="true">Normal</button>
           <button type="button" class="seg diff" data-diff="hard" data-i18n="hard" role="radio" aria-checked="false">Hard</button>
         </div>
         <button class="primary" id="btn-start" type="button" data-i18n="start">Start game</button>
+        <button class="secondary" id="btn-board" type="button" data-i18n="leaderboardBtn">🏆 Leaderboard</button>
         <p class="hint"><span data-i18n="keyboardHint">Any keyboard layout works.</span><br><span data-i18n="startHint">Press <kbd>Enter</kbd> to start · <kbd>Esc</kbd> to pause</span></p>
+      </section>
+
+      <section class="panel hidden" id="panel-board">
+        <h2 data-i18n="leaderboard">Leaderboard</h2>
+        <p class="lead" id="board-subtitle"></p>
+        <div class="board" id="board-full"></div>
+        <button class="secondary" id="btn-board-back" type="button" data-i18n="back">Back</button>
       </section>
 
       <section class="panel hidden" id="panel-pause">
@@ -78,6 +92,7 @@
           <div><dt data-i18n="accuracy">Accuracy</dt><dd id="res-acc">100%</dd></div>
           <div><dt data-i18n="bestCombo">Best combo</dt><dd id="res-combo">0</dd></div>
         </dl>
+        <div class="board" id="board-over"></div>
         <button class="primary" id="btn-restart" type="button" data-i18n="again">Play again</button>
         <button class="secondary" id="btn-menu" type="button" data-i18n="menu">Main menu</button>
         <p class="hint" data-i18n="againHint">Press <kbd>Enter</kbd> to play again</p>
@@ -85,8 +100,11 @@
     </div>
   </main>
 
+  <script src="storage.js"></script>
   <script src="words.js"></script>
   <script src="i18n.js"></script>
+  <script src="audio.js"></script>
+  <script src="leaderboard.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

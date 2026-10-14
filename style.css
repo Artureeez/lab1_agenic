@@ -371,3 +371,83 @@ kbd {
     padding: 24px 18px;
   }
 }
+
+/* ---------- Player name ---------- */
+.name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  text-align: start;
+}
+
+.name-field input {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.name-field input:focus {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+
+/* ---------- Leaderboard ---------- */
+.board {
+  margin-bottom: 18px;
+}
+
+.board table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.board th {
+  padding: 6px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: start;
+}
+
+.board td {
+  padding: 7px 8px;
+  text-align: start;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.board td.num,
+.board th.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.board td.name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board tr.me td {
+  color: var(--accent);
+  font-weight: 700;
+  background: rgba(255, 209, 102, 0.08);
+}
+
+.board .empty {
+  margin: 8px 0;
+  color: var(--muted);
+}
+
+.icon-btn.off {
+  opacity: 0.4;
+}

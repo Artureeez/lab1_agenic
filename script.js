@@ -4,6 +4,7 @@
    Typing Defence
    Type the word on an enemy to shoot it before it reaches
    your base. Plain JS + canvas, no build step needed.
+   Depends on: storage.js, words.js, i18n.js, audio.js, leaderboard.js
    ========================================================= */
 
 // ---------- DOM ----------
@@ -11,10 +12,12 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const stage = document.getElementById("stage");
 const mobileInput = document.getElementById("mobile-input");
+const nameInput = document.getElementById("player-name");
 
 const overlay = document.getElementById("overlay");
 const panels = {
   start: document.getElementById("panel-start"),
+  board: document.getElementById("panel-board"),
   pause: document.getElementById("panel-pause"),
   over: document.getElementById("panel-over"),
 };
@@ -29,72 +32,37 @@ const hud = {
   acc: document.getElementById("hud-acc"),
 };
 
+const musicBtn = document.getElementById("btn-music");
 const muteBtn = document.getElementById("btn-mute");
 const pauseBtn = document.getElementById("btn-pause");
 
 // ---------- Settings ----------
 const MAX_HP = 10;
 const BULLET_SPEED = 1100; // px per second
+const MONO = "ui-monospace, Menlo, Consolas, 'Courier New', monospace";
 const DIFFICULTY = {
   easy: { speed: 0.75, spawn: 1.3 },
   normal: { speed: 1, spawn: 1 },
   hard: { speed: 1.3, spawn: 0.8 },
 };
 
-// ---------- Storage (guarded: may be unavailable) ----------
-const storage = {
-  get(key, fallback) {
-    try {
-      const v = localStorage.getItem(key);
-      return v === null ? fallback : JSON.parse(v);
-    } catch {
-      return fallback;
-    }
-  },
-  set(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      /* ignore */
-    }
-  },
+// Power-ups drop from the sky carrying an easy word; type it to collect.
+const HEAL_AMOUNT = 3;
+const SLOW_FACTOR = 0.3; // enemies move at 30% speed during slow-mo
+const POWERUPS = {
+  heal: { icon: "❤", color: "#06d6a0", hue: 160, weight: 45 },
+  slow: { icon: "❄", color: "#4cc9f0", hue: 195, weight: 40, duration: 10 },
+  cheat: { icon: "★", color: "#ffd166", hue: 45, weight: 15, duration: 20 }, // rare
 };
+const POWERUP_INTERVAL = [10, 18]; // seconds between drops (min, max)
 
-// ---------- Sound (tiny WebAudio blips) ----------
-const sound = {
-  ctx: null,
-  muted: storage.get("td.muted", false),
-  init() {
-    if (this.ctx) return;
-    try {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    } catch {
-      this.ctx = null;
-    }
-  },
-  play(freq, duration = 0.06, type = "square", volume = 0.05, slide = 0) {
-    if (this.muted || !this.ctx) return;
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t);
-    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), t + duration);
-    gain.gain.setValueAtTime(volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-    osc.connect(gain).connect(this.ctx.destination);
-    osc.start(t);
-    osc.stop(t + duration);
-  },
-  shoot() { this.play(880, 0.05, "square", 0.03, 400); },
-  miss() { this.play(140, 0.12, "sawtooth", 0.05, -60); },
-  kill() { this.play(520, 0.18, "triangle", 0.08, -380); },
-  hurt() { this.play(90, 0.35, "sawtooth", 0.09, -40); },
-  wave() { this.play(440, 0.12, "triangle", 0.06, 220); },
-};
+function rand(min, max) {
+  return min + Math.random() * (max - min);
+}
 
-function updateMuteButton() {
+function updateSoundButtons() {
   muteBtn.textContent = sound.muted ? "🔇" : "🔊";
+  musicBtn.classList.toggle("off", !music.enabled);
 }
 
 // ---------- Canvas sizing ----------
@@ -128,15 +96,21 @@ function makeStars() {
   }));
 }
 
-// ---------- Game state ----------
+// ---------- Settings state ----------
 let difficulty = storage.get("td.difficulty", "normal");
 if (!DIFFICULTY[difficulty]) difficulty = "normal";
 
 let language = storage.get("td.language", "en");
 if (!LANGS[language]) language = "en";
 
+nameInput.value = storage.get("td.name", "");
+
 function lang() {
   return LANGS[language];
+}
+
+function playerName() {
+  return nameInput.value.trim() || lang().text.defaultName;
 }
 
 function bestKey() {
@@ -146,11 +120,13 @@ function bestKey() {
 function loadBest() {
   // English scores used to be stored without a language in the key.
   const legacy = language === "en" ? storage.get(`td.best.${difficulty}`, 0) : 0;
-  return storage.get(bestKey(), legacy);
+  return Math.max(storage.get(bestKey(), legacy), leaderboard.topScore(language, difficulty));
 }
 
+// ---------- Game state ----------
 let game = null;
 let phase = "menu"; // menu | playing | paused | over
+let currentPanel = "start";
 
 function newGame() {
   return {
@@ -158,13 +134,15 @@ function newGame() {
     best: loadBest(),
     hp: MAX_HP,
     wave: 0,
-    enemies: [],
+    enemies: [], // regular enemies, bosses and power-ups
     bullets: [],
     particles: [],
     texts: [],
     queue: [], // enemies waiting to spawn this wave
     spawnTimer: 0,
     waveDelay: 0,
+    powerupTimer: rand(...POWERUP_INTERVAL),
+    effects: { slow: 0, cheat: 0 }, // seconds left
     banner: null,
     target: null,
     aim: -Math.PI / 2,
@@ -179,6 +157,13 @@ function newGame() {
     waveDamaged: false,
   };
 }
+
+// Music speeds up with each wave and drags during slow-mo.
+music.tempo = () => {
+  if (!game) return 108;
+  const base = Math.min(150, 104 + game.wave * 2);
+  return game.effects.slow > 0 ? base * 0.7 : base;
+};
 
 // ---------- Waves ----------
 function startWave(n) {
@@ -234,11 +219,12 @@ function spawnEnemy({ boss }) {
   // Speed is expressed as "seconds to cross the screen" so it feels
   // the same on tall and short screens.
   const travelTime = Math.max(5.5, 15 - g.wave * 0.6) / diff.speed;
-  const speed = (H / travelTime) * (0.85 + Math.random() * 0.3) * (boss ? 0.55 : 1);
+  const speed = (H / travelTime) * rand(0.85, 1.15) * (boss ? 0.45 : 1);
 
   const margin = Math.min(80, W * 0.12);
   g.enemies.push({
-    x: margin + Math.random() * (W - margin * 2),
+    kind: boss ? "boss" : "enemy",
+    x: rand(margin, W - margin),
     y: -30,
     word,
     typed: 0,
@@ -246,20 +232,69 @@ function spawnEnemy({ boss }) {
     speed,
     boss,
     radius: boss ? 26 : 14,
-    hue: boss ? 340 : 180 + Math.random() * 100,
+    hue: boss ? 340 : rand(180, 280),
     doomed: false,
     flash: 0,
     spin: Math.random() * Math.PI * 2,
   });
 }
 
+function pickPowerup() {
+  const options = Object.entries(POWERUPS).filter(([kind]) => kind !== "heal" || game.hp < MAX_HP);
+  const total = options.reduce((sum, [, p]) => sum + p.weight, 0);
+  let r = Math.random() * total;
+  for (const [kind, p] of options) {
+    r -= p.weight;
+    if (r <= 0) return kind;
+  }
+  return options[0][0];
+}
+
+function spawnPowerup() {
+  const power = pickPowerup();
+  const margin = Math.min(80, W * 0.12);
+  game.enemies.push({
+    kind: "powerup",
+    power,
+    x: rand(margin, W - margin),
+    y: -30,
+    word: pickWord("easy"),
+    typed: 0,
+    hits: 0,
+    speed: H / 9, // falls straight down; never damages the base
+    boss: false,
+    radius: 16,
+    hue: POWERUPS[power].hue,
+    doomed: false,
+    flash: 0,
+    spin: 0,
+  });
+}
+
 // ---------- Typing ----------
 function handleChar(raw) {
   if (phase !== "playing") return;
-  const ch = raw.toLowerCase();
-  if (!lang().alphabet.test(ch)) return;
-
   const g = game;
+  const ch = raw.toLowerCase();
+
+  // Cheat mode: any key counts as the next correct letter.
+  if (g.effects.cheat > 0) {
+    if (!g.target) {
+      const base = basePos();
+      const candidates = g.enemies.filter((e) => !e.doomed);
+      if (candidates.length === 0) return;
+      candidates.sort((a, b) => dist(a, base) - dist(b, base));
+      g.target = candidates[0];
+    }
+    g.keystrokes++;
+    advance(g.target);
+    return;
+  }
+
+  const isSpace = ch === " ";
+  if (!isSpace && !lang().alphabet.test(ch)) return;
+  if (isSpace && !g.target) return; // stray spaces between words are harmless
+
   g.keystrokes++;
 
   if (!g.target) {
@@ -272,16 +307,20 @@ function handleChar(raw) {
 
   const t = g.target;
   if (t.word[t.typed] === ch) {
-    t.typed++;
-    g.correct++;
-    fire(t);
-    if (t.typed === t.word.length) {
-      t.doomed = true;
-      g.target = null;
-    }
+    advance(t);
   } else {
     t.flash = 0.2;
     miss();
+  }
+}
+
+function advance(t) {
+  t.typed++;
+  game.correct++;
+  fire(t);
+  if (t.typed === t.word.length) {
+    t.doomed = true;
+    game.target = null;
   }
 }
 
@@ -301,15 +340,15 @@ function fire(target) {
 function burst(x, y, hue, count, power = 1) {
   for (let i = 0; i < count; i++) {
     const a = Math.random() * Math.PI * 2;
-    const s = (Math.random() * 180 + 40) * power;
+    const s = rand(40, 220) * power;
     game.particles.push({
       x,
       y,
       vx: Math.cos(a) * s,
       vy: Math.sin(a) * s,
-      life: 0.4 + Math.random() * 0.5,
+      life: rand(0.4, 0.9),
       max: 0.9,
-      size: Math.random() * 2.5 + 1,
+      size: rand(1, 3.5),
       hue,
     });
   }
@@ -320,6 +359,7 @@ function floatText(x, y, text, color) {
 }
 
 function killEnemy(e) {
+  if (e.kind === "powerup") return collectPowerup(e);
   const g = game;
   g.combo++;
   g.bestCombo = Math.max(g.bestCombo, g.combo);
@@ -332,6 +372,18 @@ function killEnemy(e) {
   if (e.boss) g.shake = 0.3;
   removeEnemy(e);
   sound.kill();
+}
+
+function collectPowerup(e) {
+  const g = game;
+  const p = POWERUPS[e.power];
+  if (e.power === "heal") g.hp = Math.min(MAX_HP, g.hp + HEAL_AMOUNT);
+  else g.effects[e.power] = p.duration;
+  g.score += 25;
+  burst(e.x, e.y, p.hue, 36, 1.2);
+  floatText(e.x, e.y, `${p.icon} ${lang().text[e.power]}`, p.color);
+  removeEnemy(e);
+  sound.powerup();
 }
 
 function removeEnemy(e) {
@@ -367,6 +419,8 @@ function update(dt) {
   g.playTime += dt;
   g.shake = Math.max(0, g.shake - dt);
   g.missFlash = Math.max(0, g.missFlash - dt);
+  g.effects.slow = Math.max(0, g.effects.slow - dt);
+  g.effects.cheat = Math.max(0, g.effects.cheat - dt);
   if (g.banner) {
     g.banner.t -= dt;
     if (g.banner.t <= 0) g.banner = null;
@@ -375,23 +429,42 @@ function update(dt) {
   // Spawning
   if (g.waveDelay > 0) {
     g.waveDelay -= dt;
-  } else if (g.queue.length > 0) {
-    g.spawnTimer -= dt;
-    if (g.spawnTimer <= 0) {
-      spawnEnemy(g.queue.shift());
-      g.spawnTimer = g.spawnInterval * (0.7 + Math.random() * 0.6);
+  } else {
+    if (g.queue.length > 0) {
+      g.spawnTimer -= dt;
+      if (g.spawnTimer <= 0) {
+        spawnEnemy(g.queue.shift());
+        g.spawnTimer = g.spawnInterval * rand(0.7, 1.3);
+      }
+    }
+    g.powerupTimer -= dt;
+    if (g.powerupTimer <= 0) {
+      if (!g.enemies.some((e) => e.kind === "powerup")) spawnPowerup();
+      g.powerupTimer = rand(...POWERUP_INTERVAL);
     }
   }
 
-  // Enemies move toward the base
+  // Movement
+  const slow = g.effects.slow > 0 ? SLOW_FACTOR : 1;
   for (const e of [...g.enemies]) {
+    e.flash = Math.max(0, e.flash - dt);
+
+    if (e.kind === "powerup") {
+      e.y += e.speed * dt;
+      e.spin += dt;
+      if (e.y > H + 30) {
+        if (e.doomed) collectPowerup(e);
+        else removeEnemy(e);
+      }
+      continue;
+    }
+
     const dx = base.x - e.x;
     const dy = base.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
-    e.x += (dx / d) * e.speed * dt;
-    e.y += (dy / d) * e.speed * dt;
-    e.spin += dt * (e.boss ? 0.8 : 2);
-    e.flash = Math.max(0, e.flash - dt);
+    e.x += (dx / d) * e.speed * slow * dt;
+    e.y += (dy / d) * e.speed * slow * dt;
+    e.spin += dt * (e.boss ? 0.8 : 2) * slow;
 
     if (d < e.radius + 24) {
       // A word that was already finished still counts as a kill.
@@ -410,12 +483,14 @@ function update(dt) {
     if (d <= step + e.radius * 0.5) {
       g.bullets = g.bullets.filter((x) => x !== b);
       e.hits++;
-      // Knock the enemy back a little on every hit
-      const kx = e.x - base.x;
-      const ky = e.y - base.y;
-      const kd = Math.hypot(kx, ky) || 1;
-      e.x += (kx / kd) * (e.boss ? 2 : 5);
-      e.y += (ky / kd) * (e.boss ? 2 : 5);
+      if (e.kind !== "powerup") {
+        // Knock the enemy back a little on every hit
+        const kx = e.x - base.x;
+        const ky = e.y - base.y;
+        const kd = Math.hypot(kx, ky) || 1;
+        e.x += (kx / kd) * (e.boss ? 2 : 5);
+        e.y += (ky / kd) * (e.boss ? 2 : 5);
+      }
       burst(e.x, e.y, 45, 4, 0.5);
       if (e.doomed && e.hits >= e.word.length) killEnemy(e);
     } else {
@@ -440,13 +515,13 @@ function update(dt) {
   }
   g.texts = g.texts.filter((t) => t.t > 0);
 
-  // Turret aim follows current target (or the nearest doomed enemy)
+  // Turret aim follows current target (or whatever the last shot is chasing)
   const aimAt = g.target || g.bullets[g.bullets.length - 1]?.target;
   const desired = aimAt ? Math.atan2(aimAt.y - base.y, aimAt.x - base.x) : -Math.PI / 2;
   g.aim += (desired - g.aim) * Math.min(1, dt * 18);
 
-  // Wave cleared
-  if (g.waveDelay <= 0 && g.queue.length === 0 && g.enemies.length === 0) {
+  // Wave cleared (power-ups still floating don't hold the wave up)
+  if (g.waveDelay <= 0 && g.queue.length === 0 && g.enemies.every((e) => e.kind === "powerup")) {
     if (!g.waveDamaged && g.hp < MAX_HP) {
       g.hp++;
       floatText(base.x, base.y - 40, "+1 HP", "#06d6a0");
@@ -472,8 +547,9 @@ function draw(dt) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
+  const starSpeed = game && game.effects.slow > 0 ? SLOW_FACTOR : 1;
   for (const s of stars) {
-    s.y += s.speed * dt;
+    s.y += s.speed * dt * starSpeed;
     if (s.y > H) {
       s.y = 0;
       s.x = Math.random() * W;
@@ -488,6 +564,16 @@ function draw(dt) {
   }
   const g = game;
 
+  // Power-up tints
+  if (g.effects.slow > 0) {
+    ctx.fillStyle = "rgba(76, 201, 240, 0.07)";
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (g.effects.cheat > 0) {
+    ctx.fillStyle = "rgba(255, 209, 102, 0.05)";
+    ctx.fillRect(0, 0, W, H);
+  }
+
   if (g.shake > 0) {
     const m = g.shake * 14;
     ctx.translate((Math.random() - 0.5) * m, (Math.random() - 0.5) * m);
@@ -498,7 +584,11 @@ function draw(dt) {
   // Enemies (current target drawn last so its label is on top)
   const order = g.enemies.filter((e) => e !== g.target);
   if (g.target) order.push(g.target);
-  for (const e of order) drawEnemy(e, e === g.target);
+  for (const e of order) {
+    if (e.kind === "powerup") drawPowerup(e);
+    else drawEnemy(e, e === g.target);
+    drawLabel(e, e === g.target);
+  }
 
   // Bullets
   ctx.fillStyle = "#ffd166";
@@ -522,7 +612,7 @@ function draw(dt) {
   // Floating text
   ctx.direction = lang().dir;
   ctx.textAlign = "center";
-  ctx.font = "700 16px ui-monospace, Menlo, Consolas, 'Courier New', monospace";
+  ctx.font = `700 16px ${MONO}`;
   for (const t of g.texts) {
     ctx.globalAlpha = Math.max(0, t.t);
     ctx.fillStyle = t.color;
@@ -539,6 +629,8 @@ function draw(dt) {
     ctx.fillText(g.banner.text, W / 2, H / 2 - 20);
     ctx.globalAlpha = 1;
   }
+
+  drawEffectTimers(g);
 
   // Red edge flash on typo
   if (g.missFlash > 0) {
@@ -568,11 +660,11 @@ function drawBase(g) {
   ctx.arc(base.x, base.y, 40, Math.PI, Math.PI * 2);
   ctx.stroke();
 
-  // Turret barrel
+  // Turret barrel (gold while cheat mode is on)
   ctx.save();
   ctx.translate(base.x, base.y);
   ctx.rotate(g.aim);
-  ctx.fillStyle = "#c8d3f5";
+  ctx.fillStyle = g.effects.cheat > 0 ? "#ffd166" : "#c8d3f5";
   ctx.fillRect(0, -4, 30, 8);
   ctx.restore();
 
@@ -587,7 +679,6 @@ function drawBase(g) {
 }
 
 function drawEnemy(e, isTarget) {
-  // Body
   ctx.save();
   ctx.translate(e.x, e.y);
   ctx.rotate(e.spin);
@@ -607,30 +698,63 @@ function drawEnemy(e, isTarget) {
   ctx.fill();
   ctx.stroke();
   ctx.restore();
+}
 
-  // Word label
-  const fontSize = e.boss ? 18 : 15;
-  ctx.font = `700 ${fontSize}px ui-monospace, Menlo, Consolas, "Courier New", monospace`;
-  ctx.textAlign = "left";
+function drawPowerup(e) {
+  const p = POWERUPS[e.power];
+  const r = e.radius * (1 + Math.sin(e.spin * 5) * 0.08);
+  ctx.save();
+  ctx.shadowColor = p.color;
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = `hsla(${p.hue}, 80%, 22%, 0.9)`;
+  ctx.strokeStyle = p.color;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = p.color;
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const typed = e.word.slice(0, e.typed);
-  const rest = e.word.slice(e.typed);
-  const full = ctx.measureText(e.word).width;
-  const typedW = ctx.measureText(typed).width;
+  ctx.fillText(p.icon, e.x, e.y + 1);
+  ctx.restore();
+}
+
+function drawLabel(e, isTarget) {
+  // Spaces in boss sentences are shown as "·" so players can see them.
+  const display = e.word.replace(/ /g, "·");
   const padX = 8;
+  const accent = e.kind === "powerup" ? POWERUPS[e.power].color : "#ffd166";
+
+  let fontSize = e.boss ? 18 : 15;
+  ctx.font = `700 ${fontSize}px ${MONO}`;
+  let full = ctx.measureText(display).width;
+  const maxText = W - 8 - padX * 2;
+  if (full > maxText) {
+    // Long sentences on narrow screens: shrink to fit.
+    fontSize = Math.max(9, Math.floor((fontSize * maxText) / full));
+    ctx.font = `700 ${fontSize}px ${MONO}`;
+    full = ctx.measureText(display).width;
+  }
+
+  const typed = display.slice(0, e.typed);
+  const rest = display.slice(e.typed);
+  const typedW = ctx.measureText(typed).width;
   const labelW = full + padX * 2;
   const labelH = fontSize + 10;
-  let lx = e.x - labelW / 2;
-  lx = Math.max(4, Math.min(W - labelW - 4, lx));
+  const lx = Math.max(4, Math.min(W - labelW - 4, e.x - labelW / 2));
   const ly = e.y + e.radius + 8;
 
   ctx.fillStyle = isTarget ? "rgba(40, 30, 0, 0.9)" : "rgba(5, 8, 20, 0.8)";
-  ctx.strokeStyle = isTarget ? "#ffd166" : "rgba(255, 255, 255, 0.15)";
+  ctx.strokeStyle = isTarget || e.kind === "powerup" ? accent : "rgba(255, 255, 255, 0.15)";
   ctx.lineWidth = isTarget ? 2 : 1;
   roundRect(lx, ly, labelW, labelH, 6);
   ctx.fill();
   ctx.stroke();
 
+  ctx.textBaseline = "middle";
   const ty = ly + labelH / 2 + 1;
   const restColor = e.doomed ? "rgba(255,255,255,0.3)" : "#ffffff";
   if (lang().dir === "rtl") {
@@ -643,6 +767,8 @@ function drawEnemy(e, isTarget) {
     ctx.fillStyle = restColor;
     ctx.fillText(rest, right - typedW, ty);
   } else {
+    ctx.direction = "ltr";
+    ctx.textAlign = "left";
     ctx.fillStyle = "#ffd166";
     ctx.fillText(typed, lx + padX, ty);
     ctx.fillStyle = restColor;
@@ -651,7 +777,46 @@ function drawEnemy(e, isTarget) {
   ctx.textBaseline = "alphabetic";
 }
 
+// Countdown bars for active timed power-ups, in the top corner.
+function drawEffectTimers(g) {
+  const rtl = lang().dir === "rtl";
+  const w = 170;
+  const h = 26;
+  let y = 12;
+  for (const kind of ["slow", "cheat"]) {
+    const left = g.effects[kind];
+    if (left <= 0) continue;
+    const p = POWERUPS[kind];
+    const x = rtl ? W - 12 - w : 12;
+
+    ctx.fillStyle = "rgba(5, 8, 20, 0.8)";
+    roundRect(x, y, w, h, 6);
+    ctx.fill();
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 0.3;
+    const fillW = w * (left / p.duration);
+    roundRect(rtl ? x + w - fillW : x, y, fillW, h, 6);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 1;
+    roundRect(x, y, w, h, 6);
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `700 13px system-ui, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.direction = lang().dir;
+    ctx.textAlign = rtl ? "right" : "left";
+    const label = `${p.icon} ${lang().text[kind]} · ${lang().seconds(Math.ceil(left))}`;
+    ctx.fillText(label, rtl ? x + w - 10 : x + 10, y + h / 2 + 1);
+    ctx.textBaseline = "alphabetic";
+    y += h + 6;
+  }
+}
+
 function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
@@ -683,25 +848,71 @@ function updateHud() {
   hud.health.classList.toggle("low", g.hp <= 3);
 }
 
+// ---------- Leaderboard view ----------
+function renderBoard(container, { limit = LEADERBOARD_SIZE, highlightRank = 0 } = {}) {
+  const T = lang().text;
+  container.textContent = "";
+  const list = leaderboard.load(language, difficulty).slice(0, limit);
+  if (list.length === 0) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = T.emptyBoard;
+    container.append(p);
+    return;
+  }
+
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const [text, cls] of [["#", "num"], [T.colName, ""], [T.score, "num"], [T.wave, "num"], [T.wpm, "num"]]) {
+    const th = document.createElement("th");
+    th.textContent = text;
+    if (cls) th.className = cls;
+    head.append(th);
+  }
+  const body = table.createTBody();
+  list.forEach((entry, i) => {
+    const row = body.insertRow();
+    if (i + 1 === highlightRank) row.className = "me";
+    const cells = [[i + 1, "num"], [entry.name, "name"], [entry.score, "num"], [entry.wave, "num"], [entry.wpm, "num"]];
+    for (const [value, cls] of cells) {
+      const td = row.insertCell();
+      td.textContent = value; // names are user input, so never innerHTML
+      td.className = cls;
+    }
+  });
+  container.append(table);
+}
+
+function openBoard() {
+  document.getElementById("board-subtitle").textContent =
+    `${lang().text.langName} · ${lang().text[difficulty]}`;
+  renderBoard(document.getElementById("board-full"));
+  showPanel("board");
+}
+
 // ---------- Flow ----------
 function showPanel(name) {
+  currentPanel = name;
   for (const [key, el] of Object.entries(panels)) el.classList.toggle("hidden", key !== name);
   overlay.classList.toggle("hidden", name === null);
 }
 
 function startGame() {
   sound.init();
+  storage.set("td.name", nameInput.value.trim());
   game = newGame();
   phase = "playing";
   showPanel(null);
   startWave(1);
   updateHud();
+  music.start();
   focusInput();
 }
 
 function pauseGame() {
   if (phase !== "playing") return;
   phase = "paused";
+  music.stop();
   showPanel("pause");
 }
 
@@ -709,32 +920,46 @@ function resumeGame() {
   if (phase !== "paused") return;
   phase = "playing";
   showPanel(null);
+  music.start();
   focusInput();
 }
 
 function quitToMenu() {
   phase = "menu";
   game = null;
+  music.stop();
+  syncMenuButtons();
   showPanel("start");
 }
 
 function endGame() {
   const g = game;
   phase = "over";
+  music.stop();
   const { wpm, acc } = stats();
   const isRecord = g.score > g.best;
   if (isRecord) storage.set(bestKey(), g.score);
+  const rank = leaderboard.add(language, difficulty, {
+    name: playerName(),
+    score: g.score,
+    wave: g.wave,
+    wpm,
+    acc,
+  });
   updateHud();
 
-  document.getElementById("over-msg").textContent = isRecord
-    ? lang().newBest(lang().text[difficulty])
-    : lang().heldOut(g.wave);
+  const L = lang();
+  let msg = L.heldOut(g.wave);
+  if (isRecord) msg = L.newBest(L.text[difficulty]);
+  else if (rank) msg = L.rank(rank);
+  document.getElementById("over-msg").textContent = msg;
   document.getElementById("res-score").textContent = g.score;
   document.getElementById("res-wave").textContent = g.wave;
   document.getElementById("res-kills").textContent = g.kills;
   document.getElementById("res-wpm").textContent = wpm;
   document.getElementById("res-acc").textContent = `${acc}%`;
   document.getElementById("res-combo").textContent = g.bestCombo;
+  renderBoard(document.getElementById("board-over"), { limit: Math.max(5, rank), highlightRank: rank });
 
   // Small delay so the final explosion is visible
   setTimeout(() => {
@@ -755,11 +980,14 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     if (phase === "playing") pauseGame();
     else if (phase === "paused") resumeGame();
+    else if (currentPanel === "board") showPanel("start");
     return;
   }
 
   if (ev.key === "Enter") {
-    if (phase === "menu" || phase === "over") {
+    // Let focused buttons (e.g. Leaderboard) handle Enter themselves.
+    if (ev.target instanceof HTMLButtonElement) return;
+    if ((phase === "menu" && currentPanel === "start") || phase === "over") {
       ev.preventDefault();
       startGame();
     }
@@ -788,6 +1016,8 @@ canvas.addEventListener("pointerdown", () => {
   if (phase === "playing") focusInput();
 });
 
+nameInput.addEventListener("input", () => storage.set("td.name", nameInput.value.trim()));
+
 window.addEventListener("blur", pauseGame);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) pauseGame();
@@ -798,6 +1028,8 @@ document.getElementById("btn-restart").addEventListener("click", startGame);
 document.getElementById("btn-resume").addEventListener("click", resumeGame);
 document.getElementById("btn-quit").addEventListener("click", quitToMenu);
 document.getElementById("btn-menu").addEventListener("click", quitToMenu);
+document.getElementById("btn-board").addEventListener("click", openBoard);
+document.getElementById("btn-board-back").addEventListener("click", () => showPanel("start"));
 
 pauseBtn.addEventListener("click", () => {
   if (phase === "playing") pauseGame();
@@ -807,7 +1039,16 @@ pauseBtn.addEventListener("click", () => {
 muteBtn.addEventListener("click", () => {
   sound.muted = !sound.muted;
   storage.set("td.muted", sound.muted);
-  updateMuteButton();
+  updateSoundButtons();
+  if (phase === "playing") focusInput();
+});
+
+musicBtn.addEventListener("click", () => {
+  music.enabled = !music.enabled;
+  storage.set("td.music", music.enabled);
+  updateSoundButtons();
+  if (music.enabled && phase === "playing") music.start();
+  else music.stop();
   if (phase === "playing") focusInput();
 });
 
@@ -848,6 +1089,7 @@ function applyLanguage() {
   for (const el of document.querySelectorAll("[data-i18n]")) {
     el.innerHTML = L.text[el.dataset.i18n];
   }
+  nameInput.placeholder = L.text.defaultName;
   document.title = L.text.title.replace(/<[^>]+>/g, "");
   syncMenuButtons();
 }
@@ -864,7 +1106,7 @@ function frame(now) {
 
 window.addEventListener("resize", resize);
 resize();
-updateMuteButton();
+updateSoundButtons();
 applyLanguage();
 showPanel("start");
 requestAnimationFrame(frame);

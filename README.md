@@ -10,10 +10,26 @@ Built with plain **HTML, CSS and JavaScript**: no build step and no dependencies
 - Keep typing to finish the word. Each correct letter fires a shot.
 - A typo resets your **combo**. A higher combo gives more points per kill.
 - If you clear a wave without taking damage, the base repairs 1 HP.
-- Every 5th wave has a **boss** with a long word. It does 3 damage if it reaches you.
+- Every 5th wave has a **boss** with a short sentence to type (spaces count, shown as `·`). It does 3 damage if it reaches you.
 - `Enter` starts the game, and `Esc` pauses it.
 
-Best scores are saved in your browser for each language and difficulty (Easy / Normal / Hard).
+## Power-ups
+
+Glowing orbs sometimes fall from the sky carrying an easy word. Type the word to collect the power-up. They never damage your base.
+
+| Power-up        | Effect                                              | How often |
+| --------------- | --------------------------------------------------- | --------- |
+| ❤ Repair        | Restores 3 base HP                                  | Common    |
+| ❄ Slow-mo       | Enemies move at 30% speed for 10 seconds            | Common    |
+| ★ Cheat mode    | Any key counts as the correct letter for 20 seconds | Rare      |
+
+## Name and leaderboard
+
+Enter your name on the start screen. The top 10 scores are saved in your browser, with a separate leaderboard for each language and difficulty (Easy / Normal / Hard). Open it from **🏆 Leaderboard** on the start screen. The game-over screen shows where you placed. Scores are saved in this browser only and aren't shared with other players.
+
+## Sound
+
+Background music is generated in the browser while you play, so there are no audio files. It speeds up in later waves and slows down during slow-mo. 🎵 turns the music on and off, and 🔊 does the same for sound effects.
 
 ## Languages
 
@@ -25,11 +41,14 @@ You don't need to change your computer's keyboard language. The game reads which
 
 | File         | Purpose                                    |
 | ------------ | ------------------------------------------ |
-| `index.html` | Page layout, HUD and menus                 |
-| `style.css`  | Styling                                    |
-| `words.js`   | Word lists per language (easy, medium, hard, boss) |
-| `i18n.js`    | Menu text and keyboard layouts per language |
-| `script.js`  | Game loop, typing logic, rendering, sound  |
+| `index.html`     | Page layout, HUD and menus                          |
+| `style.css`      | Styling                                             |
+| `storage.js`     | Safe wrapper around browser storage                 |
+| `words.js`       | Word lists per language (easy, medium, hard, boss sentences) |
+| `i18n.js`        | Menu text and keyboard layouts per language         |
+| `audio.js`       | Sound effects and generated background music        |
+| `leaderboard.js` | Local top-10 leaderboard                            |
+| `script.js`      | Game loop, typing, power-ups, rendering, menus      |
 
 ## Run locally
 
